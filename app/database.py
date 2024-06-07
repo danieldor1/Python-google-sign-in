@@ -1,5 +1,3 @@
-import os
-
 from sqlalchemy import (
     BigInteger,
     Column,
@@ -11,15 +9,13 @@ from sqlalchemy import (
 )
 
 from sqlalchemy.orm import declarative_base
-from dotenv import load_dotenv
-
-load_dotenv()
+from config import DataBase
 
 # DB GOOGLE TABLE_NAME
-GOOGLE_SESSIONS_TABLE_NAME = os.getenv('GOOGLE_SESSIONS_TABLE_NAME')
-GOOGLE_REGISTRATION_TABLE_NAME = os.getenv("GOOGLE_REGISTRATION_TABLE_NAME")
+GOOGLE_SESSIONS_TABLE_NAME = DataBase.session_table_name.value
+GOOGLE_REGISTRATION_TABLE_NAME = DataBase.registration_table_name.name
 
-# DB INSTANCE
+# DB CONSTRUCT
 Base = declarative_base()
 
 class GoogleSession(Base):
