@@ -1,47 +1,36 @@
+#################################################
 # -*- coding: utf-8 -*-
-import jwt
+#################################################
+# MAIN ENTRYPOINT
+#################################################
 import os
 import requests
-import traceback
 
-from jwt.exceptions import InvalidTokenError
 from pathlib import Path
-from typing import Optional
-from fastapi import HTTPException, status, FastAPI, Header
-from fastapi.responses import RedirectResponse
 from starlette.requests import Request
-from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from google_auth_oauthlib.flow import Flow
+from fastapi.responses import RedirectResponse
+from fastapi import HTTPException, status, FastAPI, Header
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
-from app.schemas import HttpResponseFromDb
-from app.token_creators import TokenCreatorForAuthFlow
-from app.interactions_db import create_session_google, create_user_google, SessionLocal
-from app.database import GoogleUser
-from dotenv import load_dotenv
+from app.tokens_verify import verify_user
+from app.response import deeplink_response_generator
+from app.interactions_db import create_session_google, create_user_google
+from app.token_creator import TokenCreatorForAuthFlow
+from app.config import KeysManagerInvokator
 
-load_dotenv()
+app = FastAPI()
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=["*"])
 
-# GOOGLE API KEYS
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
-GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
-
-#URL
-GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI")
+# URL FOR CALLBACK
+GOOGLE_CLIENT_ID = KeysManagerInvokator.client_id.value
+GOOGLE_REDIRECT_URI = KeysManagerInvokator.redirect_url.value
 URL = f"https://accounts.google.com/o/oauth2/auth?response_type=code&client_id={GOOGLE_CLIENT_ID}&redirect_uri={GOOGLE_REDIRECT_URI}&scope=openid%20profile%20email&access_type=offline"
 SCOPES = [
     "https://www.googleapis.com/auth/userinfo.profile",
     "https://www.googleapis.com/auth/userinfo.email",
     "openid"
 ]
-
-# LOGINS
-ENCRYPTION_ALGORITHM_SECRET_KEY = os.getenv("SECRET_KEY")
-ENCRYPTION_ALGORITHM = os.getenv("ENCRYPTION_ALGORITHM")
-
-#DB
-
-app = FastAPI()
-app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=["*"])
 
 client_secrets_file = Path(__file__).parent / "client_secret.json"
 
@@ -52,44 +41,6 @@ flow = Flow.from_client_secrets_file(
 )
 
 
-
-#################################################
-# AUTH TOKEN
-#################################################
-
-async def verify_user(token:str) -> Optional[GoogleUser]:
-
-    db = SessionLocal()
-
-    try:
-        # print(token)
-
-        decoded_token = jwt.decode(
-            token,
-            key=ENCRYPTION_ALGORITHM_SECRET_KEY,
-            algorithms=ENCRYPTION_ALGORITHM,
-        )
-
-        email = decoded_token.get('user_email')
-
-        if email:
-            user = db.query(GoogleUser).filter(
-                GoogleUser.email == email).first()
-            if not user:
-                return f"user not found"
-
-        return f"valid"
-
-    except jwt.ExpiredSignatureError:
-        return f"expired"
-
-    except (
-        InvalidTokenError,
-        jwt.InvalidIssuerError,
-        jwt.InvalidAudienceError
-    ):
-        return f"invalid"
-
 @app.post("/verify-token")
 async def verify_token(authorization: str = Header(...)):
     """
@@ -99,7 +50,7 @@ async def verify_token(authorization: str = Header(...)):
         if authorization.startswith("Bearer "):
             token = str(authorization.split("Bearer ")[1])
             response = await verify_user(token=token)
-            return {"detail": response}
+            return {"status": response}
 
         # Raise an exception for invalid authorization header
         else:
@@ -109,7 +60,7 @@ async def verify_token(authorization: str = Header(...)):
             )
     except HTTPException as e:
         # Catch any HTTP exceptions and return a response with the detail
-        return {"detail": e.detail}
+        return {"status": e.detail}
 
 
 ##################################################
@@ -122,8 +73,7 @@ async def login_google():
 
 
 @app.get('/oauth2callback')
-async def oauth2callback(code: str,request: Request)->RedirectResponse:
-
+async def oauth2callback(code:str, request: Request):
     if code is None:
         raise HTTPException(
             status_code=400,
@@ -162,28 +112,16 @@ async def oauth2callback(code: str,request: Request)->RedirectResponse:
             token=returned_token
         )
 
-        if recieved_response_from_the_google_reg_db["status_code"] == HttpResponseFromDb.DB_ACCESS_POINT_REGISTER_SUCCESS.value:
-            deeplink_url = f'app_deeplink://status=created&token={returned_token}'
-
-        if (recieved_response_from_the_google_reg_db.get("status_code") == HttpResponseFromDb.ACCESS_POINT_INTERNAL_SERVER_ERROR.value
-                or response_status_code_from_the_session_db.get("status_code") == HttpResponseFromDb.ACCESS_POINT_INTERNAL_SERVER_ERROR.value):
-            deeplink_url = f'app_deeplink://status=login_failed&token=**&error_code={HttpResponseFromDb.ACCESS_POINT_INTERNAL_SERVER_ERROR.value}'
-        
-        elif recieved_response_from_the_google_reg_db["status_code"] == HttpResponseFromDb.DB_ACCESS_POINT_ALREADY_REGISTERED_CONFLICT.value:
-            deeplink_url = f'app_deeplink://status=authenticated&token={returned_token}'
-
-        return RedirectResponse(
-            url=deeplink_url
+        return deeplink_response_generator(
+            code_from_db=response_status_code_from_the_session_db,
+            returned_token=returned_token
         )
-        
+
     except Exception:
-        trace = traceback.format_exc()
-        deeplink_url = f'app_deeplink://status=login_failed&token=**&error_code={trace}'
+        deeplink_url = f'app_deeplink://status=login_failed&error_code=500'
         return RedirectResponse(
             url=deeplink_url
         )
-
-
 
 ##########################################
 # TEST ZONE
