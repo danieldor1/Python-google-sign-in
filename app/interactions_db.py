@@ -82,13 +82,11 @@ async def create_session_google(
             "status_code": HttpResponseFromDb.DB_ACCESS_POINT_REGISTER_SUCCESS.value,
         }
     
-    except IntegrityError as e:
-        print("IntegrityError occurred:", e)
+    except IntegrityError:
         db.rollback()
         return {"status_code": HttpResponseFromDb.DB_ACCESS_POINT_ALREADY_REGISTERED_CONFLICT.value}
 
-    except Exception as e:
-        print("Unexpected error occurred:", e)
+    except Exception:
         db.rollback()
         return {"status_code": HttpResponseFromDb.ACCESS_POINT_INTERNAL_SERVER_ERROR.value}
 
